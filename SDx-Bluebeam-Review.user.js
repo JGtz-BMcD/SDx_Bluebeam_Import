@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/JGtz-BMcD/SDx_Bluebeam_Review/issues
 // @downloadURL  https://raw.githubusercontent.com/JGtz-BMcD/SDx_Bluebeam_Review/main/SDx-Bluebeam-Review.user.js
 // @updateURL    https://raw.githubusercontent.com/JGtz-BMcD/SDx_Bluebeam_Review/main/SDx-Bluebeam-Review.user.js
-// @version      1.0.0
+// @version      1.1.0
 // @description  Import markups made in Bluebeam Revu (standard PDF annotations, incl. snapshots/stamps) into your own SDx markup layer on the document you are viewing, with author/date/subject metadata tracked. Drag and drop the PDF into the popup, or use Export to Bluebeam to copy the SDx PDF to a working folder and import it back after saving.
 // @match        https://*/enr01/*
 // @match        https://*/ENR01/*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
     "use strict";
-    const VERSION = "1.0.0";
+    const VERSION = "1.1.0";
     const TOOL = "Bluebeam Review";
     const ICON = "\u{1F4D0}";
     const IDS = { style: "sdxbm_style", btn: "sdxbm_btn", modal: "sdxbm_modal", backdrop: "sdxbm_backdrop" };
@@ -92,9 +92,15 @@
         return v || "None";
     }
 
+    // Stamps, snapshots and Bluebeam pasted images (a Square with IT=SquareImage
+    // whose picture lives in its appearance stream) are all imported as image stamps.
+    function isImageAnnot(a) {
+        return !!a && (a.Subtype === "Stamp" || (a.Subtype === "Square" && a.IT === "SquareImage"));
+    }
+
     // opts: { page, author, markupOBID, name, parentName, importedAt }
     function annotToXfdf(a, opts) {
-        const type = a.Subtype;
+        const type = isImageAnnot(a) ? "Stamp" : a.Subtype;
         if (!SUPPORTED.has(type)) return { skip: `${type || "unknown"} not supported` };
         const rect = normRect(a.Rect);
         if (!rect) return { skip: "no rectangle" };
@@ -212,7 +218,8 @@
                 custom["trn-annot-maintain-aspect-ratio"] = "true";
                 custom["trn-unrotated-rect"] = numList(rect);
                 extra = { rotation: "0", icon: "Snapshot", IT: null, color: null, width: null };
-                if (typeof opts.stampOpacity === "number" && opts.stampOpacity < 1) common.opacity = num(opts.stampOpacity);
+                // Pasted screenshots (Square/SquareImage) stay fully opaque; only snapshots/stamps use the slider.
+                if (a.Subtype === "Stamp" && typeof opts.stampOpacity === "number" && opts.stampOpacity < 1) common.opacity = num(opts.stampOpacity);
                 else common.opacity = null;
                 body = `${contents}<imagedata>${opts.imageData}</imagedata>`;
                 break;
@@ -241,7 +248,7 @@
         for (const it of items) {
             const a = it.a;
             const nm = a.NM || `p${it.page}_${it.index}`;
-            if (a.Subtype === "Stamp" && !it.imageData && ctx.previewStamps) {
+            if (isImageAnnot(a) && !it.imageData && ctx.previewStamps) {
                 // Preview only: the real image is rendered at import time.
                 if (it.ap) out.push({ name: "bb-" + nm, xml: "", tag: "stamp", page: it.page, author: a.T || "", subject: a.Subj || "" });
                 else skipped.push({ page: it.page, type: "Stamp", subject: a.Subj || "", reason: "stamp has no appearance to render" });
@@ -541,7 +548,7 @@
                     }
                 } catch {}
                 let ap = null;
-                if (a.Subtype === "Stamp") {
+                if (isImageAnnot(a)) {
                     try {
                         const apDict = dict.lookupMaybe(P.PDFName.of("AP"), P.PDFDict);
                         const nRaw = apDict && apDict.get(P.PDFName.of("N"));
@@ -1360,7 +1367,7 @@
         const sdxCount = state.sdxPages && state.sdxPages.file === state.fileOBID && state.sdxPages.sizes ? state.sdxPages.sizes.length : 0;
         const outOfRange = sdxCount ? items.filter(it => it.page >= sdxCount) : [];
         if (outOfRange.length) items = items.filter(it => it.page < sdxCount);
-        const stamps = items.filter(it => it.a.Subtype === "Stamp" && it.ap);
+        const stamps = items.filter(it => isImageAnnot(it.a) && it.ap);
         let n = 0;
         for (const it of stamps) {
             n++;
